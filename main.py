@@ -2,29 +2,35 @@ import os
 import asyncio
 import aiohttp
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message
 
+# Heroku Config Vars
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-app = Client("appx-pro", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("appx-api-pro", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 user_data = {}
 
-def get_headers(app_id, token=None):
-    headers = {"x-app-id": app_id, "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-    if token: headers["Authorization"] = f"Bearer {token}"
+# Headers Helper
+def get_headers(token=None):
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 11)"
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("🚀 **Appx Multi-Login Bot v5.0**\n\nKaam shuru karne ke liye `/login` dabbao.")
+    await message.reply_text("🌐 **Appx Universal API Extractor**\n\nShuru karne ke liye `/login` dabbao.")
 
 @app.on_message(filters.command("login"))
 async def login_start(client, message):
-    user_data[message.from_user.id] = {"step": "app_id"}
-    await message.reply_text("🆔 **STEP 1:** App ka ID (x-app-id) bhejo.\n(Example: `12345`)")
+    user_data[message.from_user.id] = {"step": "api_url"}
+    await message.reply_text("🔗 **STEP 1:** App ka API Link bhejo.\n(Example: `https://ignite247api.classx.co.in`)")
 
 @app.on_message(filters.private & ~filters.command(["start", "login"]))
 async def handle_steps(client, message: Message):
@@ -34,103 +40,82 @@ async def handle_steps(client, message: Message):
     step = user_data[user_id].get("step")
     text = message.text.strip()
 
-    # STEP 1: Get App ID & Show Options
-    if step == "app_id":
-        user_data[user_id]["app_id"] = text
-        user_data[user_id]["step"] = "choose_method"
-        await message.reply_text(
-            "✅ App ID Set!\n\n**Ab batao kaise login karna hai?**\n\n"
-            "1️⃣ Bhejo `ID PASS` (Email Password)\n"
-            "2️⃣ Bhejo `OTP 9876543210` (Phone for OTP)\n"
-            "3️⃣ Bhejo `TOKEN [Your_Token]` (Direct Token)"
-        )
+    # STEP 1: Get API URL
+    if step == "api_url":
+        # Clean URL (Remove trailing slash)
+        api_url = text.rstrip('/')
+        user_data[user_id]["api_url"] = api_url
+        user_data[user_id]["step"] = "token_phase"
+        await message.reply_text(f"✅ API Set: `{api_url}`\n\n🔑 **STEP 2:** Apna **Token** bhejo list nikalne ke liye.")
 
-    # STEP 2: Logic for 3 Methods
-    elif step == "choose_method":
-        app_id = user_data[user_id]["app_id"]
+    # STEP 2: Get Token & Fetch Courses
+    elif step == "token_phase":
+        token = text.replace("TOKEN ", "") # Handle both "TOKEN xyz" and "xyz"
+        api_url = user_data[user_id]["api_url"]
         
-        # METHOD 3: DIRECT TOKEN
-        if text.startswith("TOKEN "):
-            token = text.replace("TOKEN ", "")
-            user_data[user_id]["token"] = token
-            await fetch_courses(message, app_id, token)
+        msg = await message.reply_text("📡 Server se connect kar raha hoon...")
+        
+        # Appx standard purchased course endpoint
+        course_url = f"{api_url}/v1/course/purchased"
+        
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                async with session.get(course_url, headers=get_headers(token)) as r:
+                    if r.status != 200:
+                        return await msg.edit(f"❌ Server Error: {r.status}\nShayad URL ya Token galat hai.")
+                    
+                    courses = await r.json()
+            
+            if not courses.get("data"):
+                return await msg.edit("📭 Is account mein koi courses nahi mile.")
 
-        # METHOD 2: OTP GENERATE
-        elif text.startswith("OTP "):
-            phone = text.replace("OTP ", "")
-            user_data[user_id]["phone"] = phone
-            msg = await message.reply_text("📩 OTP bhej raha hoon...")
-            url = "https://api.appx.co.in/v1/auth/v2/otp/generate"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json={"phone": phone}, headers=get_headers(app_id)) as r:
-                    res = await r.json()
-            if res.get("success"):
-                user_data[user_id]["step"] = "verify_otp"
-                await msg.edit("✅ OTP bhej diya! Ab `VERIFY [OTP]` bhejo.")
-            else: await msg.edit("❌ OTP fail! Number check karo.")
+            user_data[user_id].update({"token": token, "step": "extract"})
+            
+            res_text = "📚 **Your Purchased Batches:**\n\n"
+            for c in courses["data"]:
+                res_text += f"🆔 `{c['id']}` → **{c['title']}**\n"
+            
+            await message.reply_text(res_text + "\n👉 **Batch ID bhejo TXT file ke liye!**")
+            await msg.delete()
 
-        # METHOD 1: ID/PASS
-        else:
-            try:
-                email, pwd = text.split(" ", 1)
-                msg = await message.reply_text("🔐 Logging in with ID/Pass...")
-                url = "https://api.appx.co.in/v1/auth/login"
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json={"email": email, "password": pwd}, headers=get_headers(app_id)) as r:
-                        res = await r.json()
-                if res.get("success"):
-                    token = res['data']['token']
-                    await fetch_courses(message, app_id, token)
-                else: await msg.edit("❌ Login failed!")
-            except: await message.reply_text("❌ Galat Format!")
+        except Exception as e:
+            await msg.edit(f"⚠️ Connection Failed!\nError: {str(e)}")
 
-    # STEP: VERIFY OTP
-    elif step == "verify_otp" and text.startswith("VERIFY "):
-        otp = text.replace("VERIFY ", "")
-        app_id = user_data[user_id]["app_id"]
-        phone = user_data[user_id]["phone"]
-        msg = await message.reply_text("🔄 OTP Verify kar raha hoon...")
-        url = "https://api.appx.co.in/v1/auth/v2/otp/verify"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json={"phone": phone, "otp": otp}, headers=get_headers(app_id)) as r:
-                res = await r.json()
-        if res.get("success"):
-            await fetch_courses(message, app_id, res['data']['token'])
-        else: await msg.edit("❌ Galat OTP!")
-
-    # FINAL STEP: BATCH EXTRACTION
+    # STEP 3: Generate TXT File
     elif step == "extract":
-        await generate_txt(message, user_data[user_id]["app_id"], user_data[user_id]["token"], text)
+        course_id = text
+        token = user_data[user_id]["token"]
+        api_url = user_data[user_id]["api_url"]
+        
+        m = await message.reply_text("📥 Extracting all links...")
+        content_url = f"{api_url}/v1/course/content/{course_id}"
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(content_url, headers=get_headers(token)) as r:
+                    data = await r.json()
+            
+            file_name = f"Batch_{course_id}.txt"
+            with open(file_name, "w", encoding="utf-8") as f:
+                for folder in data.get("data", []):
+                    f.write(f"\n📁 {folder.get('title')}\n" + "="*20 + "\n")
+                    for v in folder.get("videos", []):
+                        f.write(f"{v['title']} : {v['url']}\n")
+                    for p in folder.get("notes", []):
+                        f.write(f"{p['title']} : {p['url']}\n")
 
-async def fetch_courses(message, app_id, token):
-    msg = await message.reply_text("📚 Courses fetch kar raha hoon...")
-    url = "https://api.appx.co.in/v1/course/purchased"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=get_headers(app_id, token)) as r:
-            courses = await r.json()
-    if not courses.get("data"): return await msg.edit("📭 No courses found.")
-    
-    user_id = message.from_user.id
-    user_data[user_id].update({"token": token, "step": "extract"})
-    text = "📚 **Purchased Batches:**\n\n"
-    for c in courses["data"]: text += f"🆔 `{c['id']}` → **{c['title']}**\n"
-    await message.reply_text(text + "\n👉 **Batch ID bhejo TXT ke liye!**")
+            await message.reply_document(file_name, caption=f"✅ Extraction Done!\nBatch ID: {course_id}")
+            os.remove(file_name)
+            await m.delete()
+        except Exception as e:
+            await m.edit(f"⚠️ Extraction Error: {e}")
 
-async def generate_txt(message, app_id, token, course_id):
-    m = await message.reply_text("📥 Extracting...")
-    url = f"https://api.appx.co.in/v1/course/content/{course_id}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=get_headers(app_id, token)) as r:
-            data = await r.json()
-    
-    file = f"{course_id}.txt"
-    with open(file, "w", encoding="utf-8") as f:
-        for folder in data.get("data", []):
-            f.write(f"\n📁 {folder.get('title')}\n")
-            for v in folder.get("videos", []): f.write(f"{v['title']} : {v['url']}\n")
-    await message.reply_document(file, caption="✅ Done")
-    os.remove(file)
+# Stable Startup for Python 3.14
+async def main():
+    async with app:
+        print("🚀 UNIVERSAL BOT IS LIVE!")
+        await asyncio.Future()
 
 if __name__ == "__main__":
-    app.run()
-    
+    asyncio.run(main())
+            
