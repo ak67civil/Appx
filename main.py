@@ -6,7 +6,7 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-app = Client("appx-universal", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("universal-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 user_data = {}
 
@@ -17,17 +17,20 @@ def get_headers(token):
         "Content-Type": "application/json"
     }
 
+# ---------- START ----------
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text("🌐 Appx Universal Bot\n\n/login karke start karo")
+    await message.reply_text("🔥 Universal Extractor Bot\n\n/login se start karo")
 
+# ---------- LOGIN ----------
 @app.on_message(filters.command("login"))
-async def login_start(client, message):
-    user_data[message.from_user.id] = {"step": "api_url"}
-    await message.reply_text("🔗 API URL bhejo\nExample:\nhttps://ignite247api.classx.co.in")
+async def login(client, message):
+    user_data[message.from_user.id] = {"step": "api"}
+    await message.reply_text("🔗 API URL bhejo\nExample:\nhttps://api.appx.co.in")
 
+# ---------- HANDLER ----------
 @app.on_message(filters.private & ~filters.command(["start", "login"]))
-async def handle_steps(client, message):
+async def handler(client, message):
     user_id = message.from_user.id
 
     if user_id not in user_data:
@@ -37,28 +40,47 @@ async def handle_steps(client, message):
     text = message.text.strip()
 
     # STEP 1: API URL
-    if step == "api_url":
-        user_data[user_id]["api_url"] = text.rstrip('/')
+    if step == "api":
+        user_data[user_id]["api"] = text.rstrip("/")
         user_data[user_id]["step"] = "token"
-        await message.reply_text("🔑 Ab apna Bearer Token bhejo")
+        await message.reply_text("🔑 Token bhejo (Bearer token)")
 
     # STEP 2: TOKEN
     elif step == "token":
         token = text.replace("Bearer ", "").strip()
-        api_url = user_data[user_id]["api_url"]
+        api = user_data[user_id]["api"]
 
         msg = await message.reply_text("📡 Courses fetch ho rahe hai...")
 
+        endpoints = [
+            "/v1/course/purchased",
+            "/course/purchased",
+            "/my-courses",
+            "/user/courses"
+        ]
+
+        data = None
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{api_url}/v1/course/purchased",
-                    headers=get_headers(token)
-                ) as res:
-                    data = await res.json()
+                for ep in endpoints:
+                    try:
+                        async with session.get(api + ep, headers=get_headers(token)) as res:
+                            
+                            # Check content type
+                            if "application/json" not in res.headers.get("Content-Type", ""):
+                                continue
 
-            if not data.get("success"):
-                return await msg.edit("❌ Invalid Token ya API")
+                            json_data = await res.json()
+
+                            if json_data.get("success") or json_data.get("data"):
+                                data = json_data
+                                break
+                    except:
+                        continue
+
+            if not data:
+                return await msg.edit("❌ API ya endpoint wrong hai")
 
             user_data[user_id]["token"] = token
             user_data[user_id]["step"] = "course"
@@ -76,21 +98,38 @@ async def handle_steps(client, message):
     # STEP 3: EXTRACT
     elif step == "course":
         course_id = text
-        api_url = user_data[user_id]["api_url"]
+        api = user_data[user_id]["api"]
         token = user_data[user_id]["token"]
 
         msg = await message.reply_text("⏳ Extract ho raha hai...")
 
+        endpoints = [
+            f"/v1/course/content/{course_id}",
+            f"/course/content/{course_id}",
+            f"/course/{course_id}"
+        ]
+
+        data = None
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{api_url}/v1/course/content/{course_id}",
-                    headers=get_headers(token)
-                ) as res:
-                    data = await res.json()
+                for ep in endpoints:
+                    try:
+                        async with session.get(api + ep, headers=get_headers(token)) as res:
 
-            if not data.get("success"):
-                return await msg.edit("❌ Invalid Course ID")
+                            if "application/json" not in res.headers.get("Content-Type", ""):
+                                continue
+
+                            json_data = await res.json()
+
+                            if json_data.get("data"):
+                                data = json_data
+                                break
+                    except:
+                        continue
+
+            if not data:
+                return await msg.edit("❌ Course fetch failed")
 
             file = f"{course_id}.txt"
 
@@ -116,6 +155,6 @@ async def handle_steps(client, message):
         except Exception as e:
             await msg.edit(f"⚠️ Error: {e}")
 
-# SIMPLE RUN (NO asyncio.run)
-print("🚀 BOT STARTED")
+# ---------- RUN ----------
+print("🚀 BOT RUNNING")
 app.run()
