@@ -6,15 +6,20 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-app = Client("universal-pro-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("universal-pro", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 user_data = {}
 
-def get_headers(token):
+# 🔥 ADVANCED HEADERS
+def get_headers(token, api):
     return {
         "Authorization": f"Bearer {token}",
         "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "origin": api,
+        "referer": api + "/",
+        "x-app-id": "web",
+        "accept": "application/json"
     }
 
 # -------- START --------
@@ -28,7 +33,7 @@ async def login(client, message):
     user_data[message.from_user.id] = {"step": "api"}
     await message.reply_text("🔗 API URL bhejo\nExample:\nhttps://api.appx.co.in")
 
-# -------- AUTO DETECT FUNCTION --------
+# -------- AUTO DETECT --------
 def extract_courses(json_data):
     if isinstance(json_data, list):
         return json_data
@@ -86,9 +91,9 @@ async def handler(client, message):
             async with aiohttp.ClientSession() as session:
                 for ep in endpoints:
                     try:
-                        async with session.get(api + ep, headers=get_headers(token)) as res:
+                        async with session.get(api + ep, headers=get_headers(token, api)) as res:
 
-                            # Ignore HTML
+                            # ❌ HTML ignore
                             if "application/json" not in res.headers.get("Content-Type", ""):
                                 continue
 
@@ -104,7 +109,7 @@ async def handler(client, message):
                         continue
 
             if not data:
-                return await msg.edit("❌ API ya token invalid ya unsupported")
+                return await msg.edit("❌ API/token unsupported ya endpoint galat hai")
 
             user_data[user_id]["token"] = token
             user_data[user_id]["step"] = "course"
@@ -121,7 +126,7 @@ async def handler(client, message):
         except Exception as e:
             await msg.edit(f"⚠️ Error: {e}")
 
-    # STEP 3: COURSE EXTRACT
+    # STEP 3: EXTRACT
     elif step == "course":
         course_id = text
         api = user_data[user_id]["api"]
@@ -141,7 +146,7 @@ async def handler(client, message):
             async with aiohttp.ClientSession() as session:
                 for ep in endpoints:
                     try:
-                        async with session.get(api + ep, headers=get_headers(token)) as res:
+                        async with session.get(api + ep, headers=get_headers(token, api)) as res:
 
                             if "application/json" not in res.headers.get("Content-Type", ""):
                                 continue
