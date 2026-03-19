@@ -2,113 +2,151 @@ import os
 import asyncio
 import aiohttp
 from pyrogram import Client, filters
-from pyrogram.types import Message
 
-# Heroku Config
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-app = Client("classplus-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("cp-pro", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 user_data = {}
 
-def get_headers(api_key="877665"): # Common CP API Key
-    return {
+def headers(api_key="877665", token=None):
+    h = {
         "api-key": api_key,
-        "device-id": "android_123456",
-        "Content-Type": "application/json",
-        "User-Agent": "Mobile-Android"
+        "device-id": "android_123",
+        "User-Agent": "Mobile-Android",
+        "Content-Type": "application/json"
     }
+    if token:
+        h["x-access-token"] = token
+    return h
 
+# START
 @app.on_message(filters.command("start"))
-async def start(client, message):
-    await message.reply_text("🎓 **ClassPlus Multi-Batch Extractor**\n\nLogin ke liye `/cp_login` dabbao.")
+async def start(client, msg):
+    await msg.reply_text("🎓 ClassPlus Bot\n\nLogin: /cp_login")
 
+# LOGIN START
 @app.on_message(filters.command("cp_login"))
-async def cp_login(client, message):
-    user_id = message.from_user.id
-    user_data[user_id] = {"step": "org_code"}
-    await message.reply_text("🏢 **STEP 1:** Org Code bhejo (e.g., `abcd`)")
+async def login(client, msg):
+    user_data[msg.from_user.id] = {"step": "org"}
+    await msg.reply_text("Org Code bhejo")
 
-@app.on_message(filters.private & ~filters.command(["start", "cp_login"]))
-async def handle_cp_steps(client, message: Message):
-    user_id = message.from_user.id
-    if user_id not in user_data: return
-    
-    step = user_data[user_id].get("step")
-    text = message.text.strip()
+# FLOW
+@app.on_message(filters.private & ~filters.command(["start","cp_login"]))
+async def flow(client, msg):
+    uid = msg.from_user.id
+    if uid not in user_data:
+        return
 
-    # STEP 1: Org Code
-    if step == "org_code":
-        user_data[user_id]["org"] = text.upper()
-        user_data[user_id]["step"] = "phone"
-        await message.reply_text(f"✅ Org Code: `{text.upper()}`\n\n📱 **STEP 2:** Phone Number bhejo (91XXXXXXXXXX)")
+    step = user_data[uid]["step"]
+    text = msg.text.strip()
 
-    # STEP 2: Send OTP
+    # ORG
+    if step == "org":
+        user_data[uid]["org"] = text
+        user_data[uid]["step"] = "phone"
+        await msg.reply_text("Phone bhejo (91xxxxxxxxxx)")
+
+    # PHONE
     elif step == "phone":
-        user_data[user_id]["phone"] = text
-        m = await message.reply_text("📩 OTP bhej raha hoon...")
-        
-        url = f"https://api.classplusapp.com/v2/otp/generate?mobileNumber={text}&orgCode={user_data[user_id]['org']}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=get_headers()) as r:
-                res = await r.json()
-        
-        if res.get("success"):
-            user_data[user_id]["step"] = "otp_verify"
-            user_data[user_id]["session_id"] = res['data']['sessionId']
-            await m.edit("✅ OTP bhej diya! Ab **OTP bhejo**.")
-        else:
-            await m.edit(f"❌ Error: {res.get('message', 'Failed to send OTP')}")
+        user_data[uid]["phone"] = text
+        url = f"https://api.classplusapp.com/v2/otp/generate?mobileNumber={text}&orgCode={user_data[uid]['org']}"
 
-    # STEP 3: Verify OTP & Get Token
-    elif step == "otp_verify":
-        m = await message.reply_text("🔄 Verify kar raha hoon...")
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers=headers()) as r:
+                try:
+                    data = await r.json()
+                except:
+                    return await msg.reply_text("❌ API error")
+
+        if data.get("success"):
+            user_data[uid]["session"] = data["data"]["sessionId"]
+            user_data[uid]["step"] = "otp"
+            await msg.reply_text("OTP bhejo")
+        else:
+            await msg.reply_text("❌ OTP send fail")
+
+    # OTP
+    elif step == "otp":
         payload = {
             "otp": text,
-            "mobileNumber": user_data[user_id]["phone"],
-            "sessionId": user_data[user_id]["session_id"],
-            "orgCode": user_data[user_id]["org"]
+            "mobileNumber": user_data[uid]["phone"],
+            "sessionId": user_data[uid]["session"],
+            "orgCode": user_data[uid]["org"]
         }
-        
-        url = "https://api.classplusapp.com/v2/otp/verify"
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=get_headers()) as r:
-                res = await r.json()
-        
-        if res.get("success"):
-            token = res['data']['token']
-            user_data[user_id]["token"] = token
-            await m.edit(f"✅ **Login Success!**\n🔑 Token: `{token}`\n\n📚 Batches fetch kar raha hoon...")
-            await fetch_cp_batches(message, token)
+
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://api.classplusapp.com/v2/otp/verify", json=payload, headers=headers()) as r:
+                try:
+                    data = await r.json()
+                except:
+                    return await msg.reply_text("❌ Verify error")
+
+        if data.get("success"):
+            token = data["data"]["token"]
+            user_data[uid]["token"] = token
+            user_data[uid]["step"] = "batch"
+
+            await msg.reply_text("✅ Login Success\nFetching batches...")
+            await fetch_batches(msg, token)
         else:
-            await m.edit("❌ Galat OTP! Phir se try karo.")
+            await msg.reply_text("❌ OTP wrong")
 
-async def fetch_cp_batches(message, token):
-    headers = get_headers()
-    headers["x-access-token"] = token
-    url = "https://api.classplusapp.com/v2/batches/list"
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as r:
-            res = await r.json()
-            
-    if res.get("success"):
-        batches = res['data']['batches']
-        text = "📚 **Your Batches:**\n\n"
-        for b in batches:
-            text += f"🆔 `{b['id']}` → **{b['name']}**\n"
-        await message.reply_text(text + "\n👉 **Batch ID bhejo content nikalne ke liye!**")
-    else:
-        await message.reply_text("📭 Koi batches nahi mile.")
+    # BATCH SELECT
+    elif step == "batch":
+        await extract_batch(msg, text)
 
-# Startup Fix for Python 3.14
+# FETCH BATCHES
+async def fetch_batches(msg, token):
+    async with aiohttp.ClientSession() as s:
+        async with s.get("https://api.classplusapp.com/v2/batches/list", headers=headers(token=token)) as r:
+            try:
+                data = await r.json()
+            except:
+                return await msg.reply_text("❌ Batch API error")
+
+    if not data.get("success"):
+        return await msg.reply_text("❌ No batches")
+
+    txt = "📚 Batches:\n\n"
+    for b in data["data"]["batches"]:
+        txt += f"{b['id']} → {b['name']}\n"
+
+    await msg.reply_text(txt + "\nBatch ID bhejo")
+
+# EXTRACT
+async def extract_batch(msg, batch_id):
+    uid = msg.from_user.id
+    token = user_data[uid]["token"]
+
+    url = f"https://api.classplusapp.com/v2/course/content/get?courseId={batch_id}"
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url, headers=headers(token=token)) as r:
+            try:
+                data = await r.json()
+            except:
+                return await msg.reply_text("❌ Extract error")
+
+    if not data.get("success"):
+        return await msg.reply_text("❌ No content")
+
+    file = f"{batch_id}.txt"
+
+    with open(file, "w", encoding="utf-8") as f:
+        for item in data["data"]:
+            f.write(f"{item.get('name')} : {item.get('url')}\n")
+
+    await msg.reply_document(file)
+    os.remove(file)
+
+# RUN
 async def main():
     async with app:
-        print("🚀 CLASSPLUS BOT ONLINE!")
+        print("🚀 CP BOT LIVE")
         await asyncio.Future()
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
